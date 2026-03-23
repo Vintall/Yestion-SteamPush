@@ -104,7 +104,7 @@ func TestTracker_PlayingToIdle(t *testing.T) {
 	}
 
 	// Simulate time passing
-	tracker.sessionStart = time.Now().Add(-5 * time.Minute)
+	tracker.lastHeartbeat = time.Now().Add(-5 * time.Minute)
 
 	// Game stops
 	steam.appID = 0
@@ -174,7 +174,7 @@ func TestTracker_DayRollover(t *testing.T) {
 
 	// Simulate day change: set activeDate to yesterday
 	tracker.activeDate = "2026-03-22"
-	tracker.sessionStart = time.Now().Add(-30 * time.Minute)
+	tracker.lastHeartbeat = time.Now().Add(-30 * time.Minute)
 	initialCalls := len(yestion.upsertCalls)
 
 	// Poll again — should trigger day rollover
@@ -217,7 +217,7 @@ func TestTracker_Shutdown(t *testing.T) {
 	}
 
 	// Simulate time passing
-	tracker.sessionStart = time.Now().Add(-10 * time.Minute)
+	tracker.lastHeartbeat = time.Now().Add(-10 * time.Minute)
 
 	// Graceful shutdown
 	tracker.Shutdown()
