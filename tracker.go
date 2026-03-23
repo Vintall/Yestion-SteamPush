@@ -207,8 +207,8 @@ func (t *Tracker) enterPlaying(appID int, name string) {
 }
 
 func (t *Tracker) exitPlaying() {
-	minutes := int(time.Since(t.sessionStart).Minutes())
-	log.Printf("state: PLAYING -> IDLE (game=%q, minutes=%d)", t.currentGame.Name, minutes)
+	minutes := int(time.Since(t.lastHeartbeat).Minutes())
+	log.Printf("state: PLAYING -> IDLE (game=%q, delta=%d)", t.currentGame.Name, minutes)
 
 	if err := t.yestion.UpsertDayGame(t.currentGame.ID, t.activeDate, minutes); err != nil {
 		log.Printf("final upsert failed, queueing: %v", err)
@@ -221,8 +221,8 @@ func (t *Tracker) exitPlaying() {
 }
 
 func (t *Tracker) heartbeat() {
-	minutes := int(time.Since(t.sessionStart).Minutes())
-	log.Printf("heartbeat: game=%q, minutes=%d", t.currentGame.Name, minutes)
+	minutes := int(time.Since(t.lastHeartbeat).Minutes())
+	log.Printf("heartbeat: game=%q, delta=%d", t.currentGame.Name, minutes)
 	t.lastHeartbeat = time.Now()
 
 	if err := t.yestion.UpsertDayGame(t.currentGame.ID, t.activeDate, minutes); err != nil {
@@ -233,8 +233,8 @@ func (t *Tracker) heartbeat() {
 
 func (t *Tracker) dayRollover(newDate string) {
 	oldDate := t.activeDate
-	minutes := int(time.Since(t.sessionStart).Minutes())
-	log.Printf("day rollover: %s -> %s (game=%q, finalMinutes=%d)", oldDate, newDate, t.currentGame.Name, minutes)
+	minutes := int(time.Since(t.lastHeartbeat).Minutes())
+	log.Printf("day rollover: %s -> %s (game=%q, delta=%d)", oldDate, newDate, t.currentGame.Name, minutes)
 
 	// Final push for old day
 	if err := t.yestion.UpsertDayGame(t.currentGame.ID, oldDate, minutes); err != nil {
