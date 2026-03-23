@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const shortcutName = "YestionSteamTracker.lnk"
@@ -36,6 +37,9 @@ func installStartup() error {
 
 	shortcutPath := filepath.Join(dir, shortcutName)
 
+	// Escape single quotes for PowerShell single-quoted strings (' -> '')
+	psEscape := func(s string) string { return strings.ReplaceAll(s, "'", "''") }
+
 	// Use PowerShell to create a .lnk shortcut
 	psScript := fmt.Sprintf(`
 		$ws = New-Object -ComObject WScript.Shell
@@ -44,7 +48,7 @@ func installStartup() error {
 		$sc.WorkingDirectory = '%s'
 		$sc.Description = 'Yestion Steam Tracker'
 		$sc.Save()
-	`, shortcutPath, exePath, filepath.Dir(exePath))
+	`, psEscape(shortcutPath), psEscape(exePath), psEscape(filepath.Dir(exePath)))
 
 	cmd := exec.Command("powershell", "-NoProfile", "-Command", psScript)
 	if out, err := cmd.CombinedOutput(); err != nil {

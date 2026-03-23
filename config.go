@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 )
 
@@ -42,6 +43,12 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: yestionApiKey is required")
 	}
 
+	// Validate URL schemes — secrets are sent in requests, so require HTTPS
+	// (allow localhost for development)
+	if err := requireHTTPS(cfg.YestionURL, "yestionUrl"); err != nil {
+		return nil, err
+	}
+
 	// Apply defaults
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 120
@@ -54,4 +61,20 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// requireHTTPS validates that a URL uses https://, allowing http:// only for localhost.
+func requireHTTPS(raw, field string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("config: %s is not a valid URL: %w", field, err)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	host := u.Hostname()
+	if u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1") {
+		return nil
+	}
+	return fmt.Errorf("config: %s must use https:// (got %s://); http is only allowed for localhost", field, u.Scheme)
 }
