@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build Windows exe
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -ldflags "-H=windowsgui -s -w" -o yestion-steam-tracker.exe .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            yestion-steam-tracker.exe
+            config.example.json
+          generate_release_notes: true

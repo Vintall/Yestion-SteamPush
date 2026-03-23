@@ -1,0 +1,9 @@
+FROM golang:1.22-alpine
+
+WORKDIR /app
+COPY go.mod go.sum* ./
+RUN go mod download 2>/dev/null || true
+COPY . .
+
+# Default: run tests then build
+CMD ["sh", "-c", "go mod tidy && go test -v ./... && GOOS=windows GOARCH=amd64 go build -ldflags '-s -w' -o yestion-steam-tracker.exe ."]
