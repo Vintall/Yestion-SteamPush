@@ -1,0 +1,10 @@
+{
+  "steamApiKey": "YOUR_STEAM_WEB_API_KEY",
+  "steamId": "YOUR_STEAM_ID_64",
+  "yestionUrl": "https://yestion.cc/api",
+  "yestionApiKey": "yestion_ak_YOUR_KEY_HERE",
+  "ignoredAppIds": [480],
+  "pollIntervalSeconds": 120,
+  "heartbeatIntervalSeconds": 1200,
+  "stableReadingsRequired": 2
+}
