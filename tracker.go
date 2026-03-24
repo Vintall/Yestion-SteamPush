@@ -206,7 +206,7 @@ func (t *Tracker) exitPlaying() {
 
 	if err := t.yestion.UpdateSession(t.sessionID, duration); err != nil {
 		log.Printf("final update failed, queueing: %v", err)
-		t.pendingQueue = append(t.pendingQueue, pendingAction{t.sessionID, duration})
+		t.queuePending(t.sessionID, duration)
 	}
 
 	t.state = StateIdle
@@ -222,7 +222,7 @@ func (t *Tracker) heartbeat() {
 
 	if err := t.yestion.UpdateSession(t.sessionID, duration); err != nil {
 		log.Printf("heartbeat update failed, queueing: %v", err)
-		t.pendingQueue = append(t.pendingQueue, pendingAction{t.sessionID, duration})
+		t.queuePending(t.sessionID, duration)
 	}
 }
 
@@ -232,6 +232,19 @@ func (t *Tracker) Shutdown() {
 		t.exitPlaying()
 	}
 	t.retryPending()
+}
+
+// queuePending adds or replaces a pending action for a session.
+// Only the latest (largest) duration is kept per sessionID to prevent
+// stale heartbeat retries from regressing the server-side value.
+func (t *Tracker) queuePending(sessionID string, duration int) {
+	for i, p := range t.pendingQueue {
+		if p.sessionID == sessionID {
+			t.pendingQueue[i].duration = duration
+			return
+		}
+	}
+	t.pendingQueue = append(t.pendingQueue, pendingAction{sessionID, duration})
 }
 
 func (t *Tracker) retryPending() {
