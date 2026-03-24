@@ -30,16 +30,23 @@ func (m *mockSteam) ResolveAppInfo(appID int) (*AppInfo, error) {
 
 // Mock Yestion client
 type mockYestion struct {
-	lookupResult *YestionGame
-	createResult *YestionGame
-	upsertCalls  []upsertCall
-	createErr    error
+	lookupResult    *YestionGame
+	createResult    *YestionGame
+	sessionResult   *YestionSession
+	createErr       error
+	sessionErr      error
+	updateCalls     []updateCall
+	createSessCalls []createSessCall
 }
 
-type upsertCall struct {
-	gameID  string
-	date    string
-	minutes int
+type updateCall struct {
+	sessionID string
+	duration  int
+}
+
+type createSessCall struct {
+	gameID    string
+	startedAt time.Time
 }
 
 func (m *mockYestion) LookupBySteamID(steamAppID int) (*YestionGame, error) {
@@ -53,8 +60,19 @@ func (m *mockYestion) CreateGame(name, coverURL string, steamAppID int) (*Yestio
 	return m.createResult, nil
 }
 
-func (m *mockYestion) UpsertDayGame(gameID, date string, minutesPlayed int) error {
-	m.upsertCalls = append(m.upsertCalls, upsertCall{gameID, date, minutesPlayed})
+func (m *mockYestion) CreateSession(gameID string, startedAt time.Time) (*YestionSession, error) {
+	m.createSessCalls = append(m.createSessCalls, createSessCall{gameID, startedAt})
+	if m.sessionErr != nil {
+		return nil, m.sessionErr
+	}
+	if m.sessionResult != nil {
+		return m.sessionResult, nil
+	}
+	return &YestionSession{ID: "sess-1", GameID: gameID, Source: "steam"}, nil
+}
+
+func (m *mockYestion) UpdateSession(sessionID string, duration int) error {
+	m.updateCalls = append(m.updateCalls, updateCall{sessionID, duration})
 	return nil
 }
 
@@ -80,12 +98,12 @@ func TestTracker_IdleToPlaying(t *testing.T) {
 		t.Errorf("after 2 polls: state = %v, want PLAYING", tracker.State())
 	}
 
-	// Should have upserted day-game with 0 minutes
-	if len(yestion.upsertCalls) != 1 {
-		t.Fatalf("upsert calls = %d, want 1", len(yestion.upsertCalls))
+	// Should have created a session
+	if len(yestion.createSessCalls) != 1 {
+		t.Fatalf("createSession calls = %d, want 1", len(yestion.createSessCalls))
 	}
-	if yestion.upsertCalls[0].minutes != 0 {
-		t.Errorf("initial minutesPlayed = %d, want 0", yestion.upsertCalls[0].minutes)
+	if yestion.createSessCalls[0].gameID != "game1" {
+		t.Errorf("session gameID = %q, want %q", yestion.createSessCalls[0].gameID, "game1")
 	}
 }
 
@@ -103,7 +121,8 @@ func TestTracker_PlayingToIdle(t *testing.T) {
 		t.Fatalf("state = %v, want PLAYING", tracker.State())
 	}
 
-	// Simulate time passing
+	// Simulate time passing (5 minutes)
+	tracker.sessionStart = time.Now().Add(-5 * time.Minute)
 	tracker.lastHeartbeat = time.Now().Add(-5 * time.Minute)
 
 	// Game stops
@@ -114,10 +133,13 @@ func TestTracker_PlayingToIdle(t *testing.T) {
 		t.Errorf("state = %v, want IDLE", tracker.State())
 	}
 
-	// Should have final upsert with accumulated minutes
-	lastCall := yestion.upsertCalls[len(yestion.upsertCalls)-1]
-	if lastCall.minutes < 4 || lastCall.minutes > 6 {
-		t.Errorf("final minutesPlayed = %d, want ~5", lastCall.minutes)
+	// Should have final update with accumulated seconds (~300s)
+	if len(yestion.updateCalls) == 0 {
+		t.Fatal("expected update calls")
+	}
+	lastCall := yestion.updateCalls[len(yestion.updateCalls)-1]
+	if lastCall.duration < 290 || lastCall.duration > 310 {
+		t.Errorf("final duration = %d, want ~300", lastCall.duration)
 	}
 }
 
@@ -151,55 +173,11 @@ func TestTracker_CreatesNewGame(t *testing.T) {
 	if tracker.State() != StatePlaying {
 		t.Fatalf("state = %v, want PLAYING", tracker.State())
 	}
-	if len(yestion.upsertCalls) != 1 {
-		t.Fatalf("upsert calls = %d, want 1", len(yestion.upsertCalls))
+	if len(yestion.createSessCalls) != 1 {
+		t.Fatalf("createSession calls = %d, want 1", len(yestion.createSessCalls))
 	}
-	if yestion.upsertCalls[0].gameID != "new1" {
-		t.Errorf("gameID = %q, want %q", yestion.upsertCalls[0].gameID, "new1")
-	}
-}
-
-func TestTracker_DayRollover(t *testing.T) {
-	steam := &mockSteam{appID: 440, name: "TF2"}
-	yestion := &mockYestion{
-		lookupResult: &YestionGame{ID: "game1", Name: "TF2", SteamAppID: 440},
-	}
-	tracker := NewTracker(steam, yestion, &Config{StableReadingsRequired: 1})
-
-	// Enter PLAYING
-	tracker.Poll()
-	if tracker.State() != StatePlaying {
-		t.Fatalf("state = %v, want PLAYING", tracker.State())
-	}
-
-	// Simulate day change: set activeDate to yesterday
-	tracker.activeDate = "2026-03-22"
-	tracker.lastHeartbeat = time.Now().Add(-30 * time.Minute)
-	initialCalls := len(yestion.upsertCalls)
-
-	// Poll again — should trigger day rollover
-	tracker.Poll()
-	if tracker.State() != StatePlaying {
-		t.Errorf("state after rollover = %v, want PLAYING", tracker.State())
-	}
-
-	// Should have 2 new upsert calls: final for old date + initial for new date
-	newCalls := yestion.upsertCalls[initialCalls:]
-	if len(newCalls) != 2 {
-		t.Fatalf("new upsert calls = %d, want 2", len(newCalls))
-	}
-	if newCalls[0].date != "2026-03-22" {
-		t.Errorf("first call date = %q, want old date", newCalls[0].date)
-	}
-	if newCalls[0].minutes < 29 {
-		t.Errorf("first call minutes = %d, want ~30", newCalls[0].minutes)
-	}
-	today := time.Now().Format("2006-01-02")
-	if newCalls[1].date != today {
-		t.Errorf("second call date = %q, want %q", newCalls[1].date, today)
-	}
-	if newCalls[1].minutes != 0 {
-		t.Errorf("second call minutes = %d, want 0", newCalls[1].minutes)
+	if yestion.createSessCalls[0].gameID != "new1" {
+		t.Errorf("gameID = %q, want %q", yestion.createSessCalls[0].gameID, "new1")
 	}
 }
 
@@ -216,7 +194,8 @@ func TestTracker_Shutdown(t *testing.T) {
 		t.Fatalf("state = %v, want PLAYING", tracker.State())
 	}
 
-	// Simulate time passing
+	// Simulate time passing (10 minutes)
+	tracker.sessionStart = time.Now().Add(-10 * time.Minute)
 	tracker.lastHeartbeat = time.Now().Add(-10 * time.Minute)
 
 	// Graceful shutdown
@@ -225,10 +204,13 @@ func TestTracker_Shutdown(t *testing.T) {
 		t.Errorf("state after shutdown = %v, want IDLE", tracker.State())
 	}
 
-	// Should have final upsert with ~10 minutes
-	lastCall := yestion.upsertCalls[len(yestion.upsertCalls)-1]
-	if lastCall.minutes < 9 || lastCall.minutes > 11 {
-		t.Errorf("final minutesPlayed = %d, want ~10", lastCall.minutes)
+	// Should have final update with ~600 seconds
+	if len(yestion.updateCalls) == 0 {
+		t.Fatal("expected update calls")
+	}
+	lastCall := yestion.updateCalls[len(yestion.updateCalls)-1]
+	if lastCall.duration < 590 || lastCall.duration > 610 {
+		t.Errorf("final duration = %d, want ~600", lastCall.duration)
 	}
 }
 
@@ -240,16 +222,26 @@ func TestTracker_OfflineQueueRetry(t *testing.T) {
 
 	// Manually add a pending action to simulate a failed push
 	tracker.pendingQueue = append(tracker.pendingQueue, pendingAction{
-		gameID: "game1", date: "2026-03-23", minutes: 30,
+		sessionID: "sess-1", duration: 1800,
 	})
 
 	// Next poll should retry the pending queue
-	steam.appID = 0 // not playing anymore
 	tracker.Poll()
 
 	// Pending queue should be drained (mock always succeeds)
 	if len(tracker.pendingQueue) != 0 {
 		t.Errorf("pending queue = %d, want 0", len(tracker.pendingQueue))
+	}
+
+	// Should have retried the update
+	if len(yestion.updateCalls) != 1 {
+		t.Fatalf("update calls = %d, want 1", len(yestion.updateCalls))
+	}
+	if yestion.updateCalls[0].sessionID != "sess-1" {
+		t.Errorf("sessionID = %q, want %q", yestion.updateCalls[0].sessionID, "sess-1")
+	}
+	if yestion.updateCalls[0].duration != 1800 {
+		t.Errorf("duration = %d, want 1800", yestion.updateCalls[0].duration)
 	}
 }
 
@@ -270,5 +262,39 @@ func TestTracker_SteamAuthStopsPolling(t *testing.T) {
 	tracker.Poll()
 	if tracker.State() != StateIdle {
 		t.Error("should remain IDLE — polling disabled")
+	}
+}
+
+func TestTracker_HeartbeatUpdatesDuration(t *testing.T) {
+	steam := &mockSteam{appID: 440, name: "TF2"}
+	yestion := &mockYestion{
+		lookupResult: &YestionGame{ID: "game1", Name: "TF2", SteamAppID: 440},
+	}
+	cfg := &Config{StableReadingsRequired: 1, HeartbeatInterval: 60}
+	tracker := NewTracker(steam, yestion, cfg)
+
+	// Enter PLAYING
+	tracker.Poll()
+	if tracker.State() != StatePlaying {
+		t.Fatalf("state = %v, want PLAYING", tracker.State())
+	}
+
+	// Simulate time passing past heartbeat interval
+	tracker.sessionStart = time.Now().Add(-3 * time.Minute)
+	tracker.lastHeartbeat = time.Now().Add(-2 * time.Minute)
+
+	// Poll should trigger heartbeat
+	tracker.Poll()
+
+	// Should have an update call with total duration from session start (~180s)
+	if len(yestion.updateCalls) == 0 {
+		t.Fatal("expected heartbeat update call")
+	}
+	lastCall := yestion.updateCalls[len(yestion.updateCalls)-1]
+	if lastCall.duration < 170 || lastCall.duration > 190 {
+		t.Errorf("heartbeat duration = %d, want ~180", lastCall.duration)
+	}
+	if lastCall.sessionID != "sess-1" {
+		t.Errorf("sessionID = %q, want %q", lastCall.sessionID, "sess-1")
 	}
 }

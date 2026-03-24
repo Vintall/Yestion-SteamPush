@@ -20,6 +20,14 @@ type YestionGame struct {
 	SteamAppID int    `json:"steamAppId"`
 }
 
+type YestionSession struct {
+	ID        string `json:"id"`
+	GameID    string `json:"gameId"`
+	StartedAt string `json:"startedAt"`
+	Duration  int    `json:"duration"`
+	Source    string `json:"source"`
+}
+
 func NewYestionClient(baseURL, apiKey string) *YestionClient {
 	return &YestionClient{
 		baseURL:    baseURL,
@@ -80,6 +88,7 @@ func (c *YestionClient) LookupBySteamID(steamAppID int) (*YestionGame, error) {
 }
 
 // CreateGame creates a new game in Yestion with the given Steam metadata.
+// Returns the game on 201 (created) or 200 (merged into existing by steamAppId).
 func (c *YestionClient) CreateGame(name, coverURL string, steamAppID int) (*YestionGame, error) {
 	payload := map[string]any{
 		"name":       name,
@@ -95,10 +104,7 @@ func (c *YestionClient) CreateGame(name, coverURL string, steamAppID int) (*Yest
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return nil, fmt.Errorf("create game: conflict (duplicate name or steamAppId)")
-	}
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("create game: status %d", resp.StatusCode)
 	}
 
@@ -109,21 +115,46 @@ func (c *YestionClient) CreateGame(name, coverURL string, steamAppID int) (*Yest
 	return &game, nil
 }
 
-// UpsertDayGame links a game to a day with the given playtime (SET semantics).
-func (c *YestionClient) UpsertDayGame(gameID, date string, minutesPlayed int) error {
+// CreateSession creates a new game session. Returns the session with its ID.
+func (c *YestionClient) CreateSession(gameID string, startedAt time.Time) (*YestionSession, error) {
 	payload := map[string]any{
-		"gameId":        gameID,
-		"minutesPlayed": minutesPlayed,
+		"gameId":    gameID,
+		"startedAt": startedAt.UTC().Format(time.RFC3339),
+		"duration":  0,
+		"source":    "steam",
 	}
 
-	resp, err := c.doRequest("POST", fmt.Sprintf("/games/day/%s", date), payload)
+	resp, err := c.doRequest("POST", "/game-sessions", payload)
 	if err != nil {
-		return fmt.Errorf("upsert day game: %w", err)
+		return nil, fmt.Errorf("create session: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("upsert day game: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("create session: status %d", resp.StatusCode)
+	}
+
+	var session YestionSession
+	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+		return nil, fmt.Errorf("decode session: %w", err)
+	}
+	return &session, nil
+}
+
+// UpdateSession updates the duration of an existing game session.
+func (c *YestionClient) UpdateSession(sessionID string, duration int) error {
+	payload := map[string]any{
+		"duration": duration,
+	}
+
+	resp, err := c.doRequest("PATCH", fmt.Sprintf("/game-sessions/%s", sessionID), payload)
+	if err != nil {
+		return fmt.Errorf("update session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("update session: status %d", resp.StatusCode)
 	}
 	return nil
 }

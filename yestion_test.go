@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestYestionClient_LookupBySteamID_Found(t *testing.T) {
@@ -81,23 +82,29 @@ func TestYestionClient_CreateGame(t *testing.T) {
 	}
 }
 
-func TestYestionClient_CreateGame_Conflict(t *testing.T) {
+func TestYestionClient_CreateGame_Merge(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Game already exists"})
+		// Server returns 200 (merged into existing) instead of 201
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "existing1", "name": "TF2", "steamAppId": 440,
+		})
 	}))
 	defer srv.Close()
 
 	client := NewYestionClient(srv.URL, "testkey")
-	_, err := client.CreateGame("TF2", "", 440)
-	if err == nil {
-		t.Fatal("expected error for 409")
+	game, err := client.CreateGame("TF2", "", 440)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if game.ID != "existing1" {
+		t.Errorf("ID = %q, want %q", game.ID, "existing1")
 	}
 }
 
-func TestYestionClient_UpsertDayGame(t *testing.T) {
+func TestYestionClient_CreateSession(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.URL.Path != "/games/day/2026-03-23" {
+		if r.Method != "POST" || r.URL.Path != "/game-sessions" {
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -106,16 +113,49 @@ func TestYestionClient_UpsertDayGame(t *testing.T) {
 		if payload["gameId"] != "game1" {
 			t.Errorf("gameId = %v", payload["gameId"])
 		}
-		if int(payload["minutesPlayed"].(float64)) != 45 {
-			t.Errorf("minutesPlayed = %v", payload["minutesPlayed"])
+		if payload["source"] != "steam" {
+			t.Errorf("source = %v", payload["source"])
+		}
+		if int(payload["duration"].(float64)) != 0 {
+			t.Errorf("duration = %v, want 0", payload["duration"])
 		}
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "sess-1", "gameId": "game1", "duration": 0, "source": "steam",
+		})
 	}))
 	defer srv.Close()
 
 	client := NewYestionClient(srv.URL, "testkey")
-	err := client.UpsertDayGame("game1", "2026-03-23", 45)
+	session, err := client.CreateSession("game1", time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if session.ID != "sess-1" {
+		t.Errorf("ID = %q, want %q", session.ID, "sess-1")
+	}
+	if session.GameID != "game1" {
+		t.Errorf("GameID = %q, want %q", session.GameID, "game1")
+	}
+}
+
+func TestYestionClient_UpdateSession(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" || r.URL.Path != "/game-sessions/sess-1" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		json.Unmarshal(body, &payload)
+		if int(payload["duration"].(float64)) != 2700 {
+			t.Errorf("duration = %v, want 2700", payload["duration"])
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := NewYestionClient(srv.URL, "testkey")
+	err := client.UpdateSession("sess-1", 2700)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

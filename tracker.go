@@ -33,7 +33,8 @@ type SteamPoller interface {
 type YestionPusher interface {
 	LookupBySteamID(steamAppID int) (*YestionGame, error)
 	CreateGame(name, coverURL string, steamAppID int) (*YestionGame, error)
-	UpsertDayGame(gameID, date string, minutesPlayed int) error
+	CreateSession(gameID string, startedAt time.Time) (*YestionSession, error)
+	UpdateSession(sessionID string, duration int) error
 }
 
 type Tracker struct {
@@ -45,8 +46,8 @@ type Tracker struct {
 	steamDisabled bool // set on auth failure, stops polling
 	currentAppID  int
 	currentGame   *YestionGame
+	sessionID     string
 	sessionStart  time.Time
-	activeDate    string
 	lastHeartbeat time.Time
 
 	// Stable reading tracking
@@ -58,9 +59,8 @@ type Tracker struct {
 }
 
 type pendingAction struct {
-	gameID  string
-	date    string
-	minutes int
+	sessionID string
+	duration  int
 }
 
 func NewTracker(steam SteamPoller, yestion YestionPusher, config *Config) *Tracker {
@@ -133,14 +133,6 @@ func (t *Tracker) pollIdle(appID int, name string) {
 }
 
 func (t *Tracker) pollPlaying(appID int) {
-	now := time.Now()
-	today := now.Format("2006-01-02")
-
-	// Check day rollover
-	if today != t.activeDate {
-		t.dayRollover(today)
-	}
-
 	if appID == t.currentAppID {
 		// Still playing — check heartbeat
 		if t.config.HeartbeatInterval > 0 &&
@@ -190,67 +182,47 @@ func (t *Tracker) enterPlaying(appID int, name string) {
 	}
 
 	now := time.Now()
+
+	// Create session in Yestion
+	session, err := t.yestion.CreateSession(game.ID, now)
+	if err != nil {
+		log.Printf("create session failed: %v", err)
+		return
+	}
+
 	t.state = StatePlaying
 	t.currentAppID = appID
 	t.currentGame = game
+	t.sessionID = session.ID
 	t.sessionStart = now
-	t.activeDate = now.Format("2006-01-02")
 	t.lastHeartbeat = now
 	t.consecutiveAppID = 0
 	t.consecutiveCount = 0
-
-	// Initial link with 0 minutes
-	if err := t.yestion.UpsertDayGame(game.ID, t.activeDate, 0); err != nil {
-		log.Printf("initial upsert failed, queueing: %v", err)
-		t.pendingQueue = append(t.pendingQueue, pendingAction{game.ID, t.activeDate, 0})
-	}
 }
 
 func (t *Tracker) exitPlaying() {
-	minutes := int(time.Since(t.lastHeartbeat).Minutes())
-	log.Printf("state: PLAYING -> IDLE (game=%q, delta=%d)", t.currentGame.Name, minutes)
+	duration := int(time.Since(t.sessionStart).Seconds())
+	log.Printf("state: PLAYING -> IDLE (game=%q, duration=%ds)", t.currentGame.Name, duration)
 
-	if err := t.yestion.UpsertDayGame(t.currentGame.ID, t.activeDate, minutes); err != nil {
-		log.Printf("final upsert failed, queueing: %v", err)
-		t.pendingQueue = append(t.pendingQueue, pendingAction{t.currentGame.ID, t.activeDate, minutes})
+	if err := t.yestion.UpdateSession(t.sessionID, duration); err != nil {
+		log.Printf("final update failed, queueing: %v", err)
+		t.pendingQueue = append(t.pendingQueue, pendingAction{t.sessionID, duration})
 	}
 
 	t.state = StateIdle
 	t.currentAppID = 0
 	t.currentGame = nil
+	t.sessionID = ""
 }
 
 func (t *Tracker) heartbeat() {
-	minutes := int(time.Since(t.lastHeartbeat).Minutes())
-	log.Printf("heartbeat: game=%q, delta=%d", t.currentGame.Name, minutes)
+	duration := int(time.Since(t.sessionStart).Seconds())
+	log.Printf("heartbeat: game=%q, duration=%ds", t.currentGame.Name, duration)
 	t.lastHeartbeat = time.Now()
 
-	if err := t.yestion.UpsertDayGame(t.currentGame.ID, t.activeDate, minutes); err != nil {
-		log.Printf("heartbeat upsert failed, queueing: %v", err)
-		t.pendingQueue = append(t.pendingQueue, pendingAction{t.currentGame.ID, t.activeDate, minutes})
-	}
-}
-
-func (t *Tracker) dayRollover(newDate string) {
-	oldDate := t.activeDate
-	minutes := int(time.Since(t.lastHeartbeat).Minutes())
-	log.Printf("day rollover: %s -> %s (game=%q, delta=%d)", oldDate, newDate, t.currentGame.Name, minutes)
-
-	// Final push for old day
-	if err := t.yestion.UpsertDayGame(t.currentGame.ID, oldDate, minutes); err != nil {
-		log.Printf("rollover final upsert failed, queueing: %v", err)
-		t.pendingQueue = append(t.pendingQueue, pendingAction{t.currentGame.ID, oldDate, minutes})
-	}
-
-	// Reset for new day
-	t.activeDate = newDate
-	t.sessionStart = time.Now()
-	t.lastHeartbeat = time.Now()
-
-	// Initial link for new day
-	if err := t.yestion.UpsertDayGame(t.currentGame.ID, newDate, 0); err != nil {
-		log.Printf("rollover new day upsert failed, queueing: %v", err)
-		t.pendingQueue = append(t.pendingQueue, pendingAction{t.currentGame.ID, newDate, 0})
+	if err := t.yestion.UpdateSession(t.sessionID, duration); err != nil {
+		log.Printf("heartbeat update failed, queueing: %v", err)
+		t.pendingQueue = append(t.pendingQueue, pendingAction{t.sessionID, duration})
 	}
 }
 
@@ -269,11 +241,11 @@ func (t *Tracker) retryPending() {
 
 	var remaining []pendingAction
 	for _, p := range t.pendingQueue {
-		if err := t.yestion.UpsertDayGame(p.gameID, p.date, p.minutes); err != nil {
-			log.Printf("retry failed for %s/%s: %v", p.gameID, p.date, err)
+		if err := t.yestion.UpdateSession(p.sessionID, p.duration); err != nil {
+			log.Printf("retry failed for session %s: %v", p.sessionID, err)
 			remaining = append(remaining, p)
 		} else {
-			log.Printf("retry succeeded for %s/%s (%d min)", p.gameID, p.date, p.minutes)
+			log.Printf("retry succeeded for session %s (%ds)", p.sessionID, p.duration)
 		}
 	}
 	t.pendingQueue = remaining
