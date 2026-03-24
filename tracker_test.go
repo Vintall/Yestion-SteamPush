@@ -133,13 +133,13 @@ func TestTracker_PlayingToIdle(t *testing.T) {
 		t.Errorf("state = %v, want IDLE", tracker.State())
 	}
 
-	// Should have final update with accumulated seconds (~300s)
+	// Should have final update with accumulated minutes (~5)
 	if len(yestion.updateCalls) == 0 {
 		t.Fatal("expected update calls")
 	}
 	lastCall := yestion.updateCalls[len(yestion.updateCalls)-1]
-	if lastCall.duration < 290 || lastCall.duration > 310 {
-		t.Errorf("final duration = %d, want ~300", lastCall.duration)
+	if lastCall.duration < 4 || lastCall.duration > 6 {
+		t.Errorf("final duration = %d, want ~5", lastCall.duration)
 	}
 }
 
@@ -204,13 +204,13 @@ func TestTracker_Shutdown(t *testing.T) {
 		t.Errorf("state after shutdown = %v, want IDLE", tracker.State())
 	}
 
-	// Should have final update with ~600 seconds
+	// Should have final update with ~10 minutes
 	if len(yestion.updateCalls) == 0 {
 		t.Fatal("expected update calls")
 	}
 	lastCall := yestion.updateCalls[len(yestion.updateCalls)-1]
-	if lastCall.duration < 590 || lastCall.duration > 610 {
-		t.Errorf("final duration = %d, want ~600", lastCall.duration)
+	if lastCall.duration < 9 || lastCall.duration > 11 {
+		t.Errorf("final duration = %d, want ~10", lastCall.duration)
 	}
 }
 
@@ -222,7 +222,7 @@ func TestTracker_OfflineQueueRetry(t *testing.T) {
 
 	// Manually add a pending action to simulate a failed push
 	tracker.pendingQueue = append(tracker.pendingQueue, pendingAction{
-		sessionID: "sess-1", duration: 1800,
+		sessionID: "sess-1", duration: 30,
 	})
 
 	// Next poll should retry the pending queue
@@ -240,8 +240,8 @@ func TestTracker_OfflineQueueRetry(t *testing.T) {
 	if yestion.updateCalls[0].sessionID != "sess-1" {
 		t.Errorf("sessionID = %q, want %q", yestion.updateCalls[0].sessionID, "sess-1")
 	}
-	if yestion.updateCalls[0].duration != 1800 {
-		t.Errorf("duration = %d, want 1800", yestion.updateCalls[0].duration)
+	if yestion.updateCalls[0].duration != 30 {
+		t.Errorf("duration = %d, want 30", yestion.updateCalls[0].duration)
 	}
 }
 
@@ -286,13 +286,13 @@ func TestTracker_HeartbeatUpdatesDuration(t *testing.T) {
 	// Poll should trigger heartbeat
 	tracker.Poll()
 
-	// Should have an update call with total duration from session start (~180s)
+	// Should have an update call with total duration from session start (~3 minutes)
 	if len(yestion.updateCalls) == 0 {
 		t.Fatal("expected heartbeat update call")
 	}
 	lastCall := yestion.updateCalls[len(yestion.updateCalls)-1]
-	if lastCall.duration < 170 || lastCall.duration > 190 {
-		t.Errorf("heartbeat duration = %d, want ~180", lastCall.duration)
+	if lastCall.duration < 2 || lastCall.duration > 4 {
+		t.Errorf("heartbeat duration = %d, want ~3", lastCall.duration)
 	}
 	if lastCall.sessionID != "sess-1" {
 		t.Errorf("sessionID = %q, want %q", lastCall.sessionID, "sess-1")

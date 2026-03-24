@@ -201,8 +201,8 @@ func (t *Tracker) enterPlaying(appID int, name string) {
 }
 
 func (t *Tracker) exitPlaying() {
-	duration := int(time.Since(t.sessionStart).Seconds())
-	log.Printf("state: PLAYING -> IDLE (game=%q, duration=%ds)", t.currentGame.Name, duration)
+	duration := int(time.Since(t.sessionStart).Minutes())
+	log.Printf("state: PLAYING -> IDLE (game=%q, duration=%dm)", t.currentGame.Name, duration)
 
 	if err := t.yestion.UpdateSession(t.sessionID, duration); err != nil {
 		log.Printf("final update failed, queueing: %v", err)
@@ -216,8 +216,8 @@ func (t *Tracker) exitPlaying() {
 }
 
 func (t *Tracker) heartbeat() {
-	duration := int(time.Since(t.sessionStart).Seconds())
-	log.Printf("heartbeat: game=%q, duration=%ds", t.currentGame.Name, duration)
+	duration := int(time.Since(t.sessionStart).Minutes())
+	log.Printf("heartbeat: game=%q, duration=%dm", t.currentGame.Name, duration)
 	t.lastHeartbeat = time.Now()
 
 	if err := t.yestion.UpdateSession(t.sessionID, duration); err != nil {
@@ -258,7 +258,7 @@ func (t *Tracker) retryPending() {
 			log.Printf("retry failed for session %s: %v", p.sessionID, err)
 			remaining = append(remaining, p)
 		} else {
-			log.Printf("retry succeeded for session %s (%ds)", p.sessionID, p.duration)
+			log.Printf("retry succeeded for session %s (%dm)", p.sessionID, p.duration)
 		}
 	}
 	t.pendingQueue = remaining
